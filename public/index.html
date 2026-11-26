@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>El Barrio · Reseñas</title>
+  <meta name="description" content="Reseñas del club de lectura El Barrio. Fomentando la lectura en Ronda desde 2021.">
+  <link rel="icon" href="img/logo.jpg">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#/">
+        <img src="img/logo.jpg" alt="" class="brand-logo">
+        <span class="brand-text">
+          <span class="brand-name">El Barrio</span>
+          <span class="brand-tag">Club de lectura · Ronda</span>
+        </span>
+      </a>
+      <nav class="main-nav">
+        <a href="#/" data-nav="inicio">Reseñas</a>
+        <a href="#/?agrupar=nacionalidad" data-nav="explorar">Explorar</a>
+        <a href="#/nueva" class="btn btn-primary btn-sm" data-nav="nueva" data-admin-only hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Nueva reseña</span>
+        </a>
+      </nav>
+    </div>
+    <div class="brand-stripe" aria-hidden="true"></div>
+    <div class="admin-bar" data-admin-only hidden role="status">
+      <div class="wrap admin-bar-inner">
+        <span class="admin-bar-label"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
+          <strong>Modo administrador</strong><span class="admin-bar-hint">Puedes publicar, editar y borrar. Los visitantes no ven estos botones.</span></span>
+        <span class="admin-bar-actions"><a href="#/admin">Panel</a><button type="button" data-action="logout">Cerrar sesión</button></span>
+      </div>
+    </div>
+  </header>
+
+  <main id="app" class="wrap" tabindex="-1"></main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <img src="img/logo.jpg" alt="" class="footer-logo">
+      <p><strong>El Barrio</strong> · Fomentando la lectura en Ronda desde 2021.<br>
+        Encuentros, reseñas y descubrimientos editoriales. ¿Nos acompañas?<br>
+        Instagram: <a href="https://www.instagram.com/elbarriolee/" target="_blank" rel="noopener">@elbarriolee</a></p>
+      <a class="admin-link" href="#/admin">Administración</a>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

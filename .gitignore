@@ -1,0 +1,18 @@
+# Contraseña de administración (hash): solo en el ordenador del administrador
+data/admin.json
+
+# Archivos temporales que deja el servidor al guardar o subir
+*.tmp
+*.part
+
+# Export original de Instagram (264 MB) y archivos de prueba del principio
+instagram/
+opinion1.png
+opinion1.txt
+/logo.jpg
+
+# Versión pública generada (la crea GitHub al publicar)
+_site/
+
+node_modules/
+.DS_Store

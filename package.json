@@ -1,0 +1,14 @@
+{
+  "name": "elbarrio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web de reseñas del club de lectura El Barrio",
+  "scripts": {
+    "start": "node server.js",
+    "contrasena": "node scripts/contrasena.js",
+    "web-publica": "node scripts/web-publica.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
