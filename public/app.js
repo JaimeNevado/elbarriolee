@@ -1002,7 +1002,7 @@ function renderGrail() {
     <section class="intro intro-3d fade-in">
       <div>
         <h1>A la búsqueda <em>del Grial</em></h1>
-        <p>Todas las reseñas de libros del club, de la más reciente a la primera.</p>
+        <p>Un recorrido por todos los libros leídos en busca de la lectura perfecta para nuestros encuentros.</p>
         ${admin ? '<a class="btn btn-primary" href="#/nueva">+ Nueva reseña</a>' : ''}
       </div>
       <div class="stats"><div class="stat"><strong>${list.length}</strong><span>reseñas</span></div></div>
