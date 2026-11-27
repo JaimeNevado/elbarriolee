@@ -7,6 +7,10 @@ let reviews = [];
 let encounters = [];
 // Solo cambia qué botones se ven; el servidor comprueba la sesión en cada operación.
 let admin = false;
+// Panel local (icono del escritorio): sin contraseña y con el botón «Subir cambios a la web».
+let localMode = false;
+let pending = [];
+let lastUpload = null;
 // La versión publicada en GitHub Pages no tiene servidor: lee los datos de archivos y no tiene administración.
 const STATIC = document.documentElement.dataset.static === '1';
 
@@ -140,8 +144,45 @@ async function staticData(url) {
 async function loadAdmin() {
   if (STATIC) return setAdmin(false);
   const state = await api('GET', '/api/admin');
+  localMode = Boolean(state.local);
+  document.querySelectorAll('[data-local-only]').forEach((el) => { el.hidden = !localMode; });
+  document.querySelectorAll('[data-remote-only]').forEach((el) => { el.hidden = localMode; });
+  if (localMode) {
+    document.querySelector('.admin-bar-label strong').textContent = 'Panel de edición';
+    document.querySelector('.admin-bar-hint').textContent = 'Lo que cambies aquí no sale en la web hasta que pulses «Subir cambios a la web».';
+  }
   setAdmin(state.admin);
+  if (localMode) await loadPending();
   return state;
+}
+
+async function loadPending() {
+  const state = await api('GET', '/api/publicar').catch(() => ({ cambios: [] }));
+  pending = state.cambios;
+  lastUpload = state.ultimaSubida;
+  const count = document.querySelector('.publish-count');
+  count.textContent = pending.length;
+  count.hidden = !pending.length;
+}
+
+async function publishChanges(button) {
+  await loadPending();
+  if (!pending.length) return toast('No hay cambios pendientes: la web ya está al día.');
+  if (!confirm(`Se subirán a elbarriolee.club estos cambios:\n\n${pending.map((c) => `• ${c.texto}`).join('\n')}\n\n¿Subirlos ahora?`)) return;
+  const label = button.innerHTML;
+  document.querySelectorAll('[data-action="publish"]').forEach((b) => { b.disabled = true; });
+  button.textContent = 'Subiendo…';
+  try {
+    await api('POST', '/api/publicar');
+    toast('¡Subido! La web se actualizará en uno o dos minutos.');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    button.innerHTML = label;
+    document.querySelectorAll('[data-action="publish"]').forEach((b) => { b.disabled = false; });
+    await loadPending();
+    if (parseHash().parts[0] === 'admin') route();
+  }
 }
 
 function setAdmin(value) {
@@ -414,7 +455,7 @@ function featuredCard(r) {
 function card(r) {
   return `
     <a class="card fade-in" href="${reviewLink(r)}">
-      <div class="card-media"><img src="${esc(r.imagen)}" alt="Imagen de la reseña de ${esc(r.titulo)}" loading="lazy"></div>
+      <div class="card-media">${pendingBadge(`resena:${r.id}`)}<img src="${esc(r.imagen)}" alt="Imagen de la reseña de ${esc(r.titulo)}" loading="lazy"></div>
       <div class="card-body">
         <div class="meta-line">
           <span>${fmtDate(r.fecha)}</span>
@@ -529,11 +570,8 @@ function renderDetail(id) {
   });
 
   app.querySelector('[data-action="delete"]')?.addEventListener('click', async () => {
-    if (!confirm(`¿Eliminar la reseña de «${r.titulo}»? No se puede deshacer.`)) return;
     try {
-      await api('DELETE', `/api/resenas/${encodeURIComponent(r.id)}`);
-      await loadReviews();
-      toast('Reseña eliminada');
+      if (!await deleteEntry(`resena:${r.id}`, r.titulo)) return;
       location.hash = '#/';
     } catch (err) {
       toast(err.message, true);
@@ -612,7 +650,7 @@ function mediaSummary(e) {
 function encounterCard(e) {
   return `
     <a class="card fade-in" href="${encounterLink(e)}">
-      <div class="card-media"><img src="${esc(e.portada || 'img/logo.jpg')}" alt="${esc(e.titulo)}" loading="lazy"></div>
+      <div class="card-media">${pendingBadge(`encuentro:${e.id}`)}<img src="${esc(e.portada || 'img/logo.jpg')}" alt="${esc(e.titulo)}" loading="lazy"></div>
       <div class="card-body">
         <div class="meta-line"><span>${fmtDate(e.fecha)}</span><span class="dot"></span><span>${esc(e.lugar)}</span></div>
         <h3>${esc(e.titulo)}</h3>
@@ -683,10 +721,8 @@ function renderEncounter(id) {
     </dialog>`;
 
   app.querySelector('[data-action="delete-encounter"]')?.addEventListener('click', async () => {
-    if (!confirm(`¿Eliminar «${e.titulo}» con todas sus fotos y vídeos? No se puede deshacer.`)) return;
     try {
-      await api('DELETE', `/api/encuentros/${encodeURIComponent(e.id)}`);
-      toast('Encuentro eliminado');
+      if (!await deleteEntry(`encuentro:${e.id}`, e.titulo)) return;
       location.hash = '#/literatura-3d';
     } catch (err) {
       toast(err.message, true);
@@ -772,6 +808,7 @@ function renderEncounterForm(id) {
             <span>Arrástralos aquí o haz clic. Las fotos se optimizan solas; los vídeos, hasta 400 MB (MP4 o MOV).</span>
           </label></div>
         <div class="form-actions">
+          ${existing ? '<button type="button" class="btn btn-ghost btn-danger-text form-delete" data-form-delete>Eliminar encuentro</button>' : ''}
           <a class="btn btn-ghost" href="${backLink}">Cancelar</a>
           <button class="btn btn-primary" type="submit">${existing ? 'Guardar cambios' : 'Publicar encuentro'}</button>
         </div>
@@ -779,6 +816,13 @@ function renderEncounterForm(id) {
     </div>`;
 
   const form = app.querySelector('form');
+  form.querySelector('[data-form-delete]')?.addEventListener('click', async () => {
+    try {
+      if (await deleteEntry(`encuentro:${existing.id}`, existing.titulo)) location.hash = '#/literatura-3d';
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
   const manager = form.querySelector('.media-manager');
   const drop = form.querySelector('.media-drop');
   const fileInput = drop.querySelector('input');
@@ -1078,6 +1122,7 @@ function renderForm(existing, missingId) {
             <textarea id="f-texto" name="texto">${esc(r.texto || '')}</textarea>
           </div>
           <div class="form-actions">
+            ${existing ? '<button type="button" class="btn btn-ghost btn-danger-text form-delete" data-form-delete>Eliminar reseña</button>' : ''}
             <a class="btn btn-ghost" href="${existing ? reviewLink(existing) : '#/'}">Cancelar</a>
             <button class="btn btn-primary" type="submit">${existing ? 'Guardar cambios' : 'Publicar reseña'}</button>
           </div>
@@ -1087,6 +1132,13 @@ function renderForm(existing, missingId) {
     </div>`;
 
   const form = app.querySelector('form');
+  form.querySelector('[data-form-delete]')?.addEventListener('click', async () => {
+    try {
+      if (await deleteEntry(`resena:${existing.id}`, existing.titulo)) location.hash = '#/';
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
   bindStarClear(form);
 
   // --- Temáticas ---
@@ -1260,6 +1312,188 @@ async function scaledCanvas(file, max) {
   }
 }
 
+// ---------- Panel ----------
+
+let panelTab = 'resenas';
+let panelQuery = '';
+
+const pendingFor = (clave) => pending.find((c) => c.clave === clave);
+const ACTION_LABEL = { nuevo: 'Nuevo', editado: 'Editado', eliminado: 'Eliminado' };
+
+function pendingBadge(clave) {
+  const change = localMode && pendingFor(clave);
+  return change ? `<span class="pending-badge is-${change.accion}">${ACTION_LABEL[change.accion]} · sin subir</span>` : '';
+}
+
+function undoLabel(change) {
+  return { nuevo: 'Borrar', editado: 'Deshacer cambios', eliminado: 'Recuperar' }[change.accion];
+}
+
+function undoQuestion(change) {
+  if (change.accion === 'nuevo') return `¿Borrar «${change.titulo}»? Es nueva y aún no está en la web, así que desaparecerá del todo.`;
+  if (change.accion === 'editado') return `¿Deshacer los cambios en «${change.titulo}»? Volverá a estar como en la web.`;
+  return `¿Recuperar «${change.titulo}»? Volverá a estar como en la web.`;
+}
+
+function pendingRow(change) {
+  if (change.archivos) {
+    return `
+      <li class="pending-row">
+        <details>
+          <summary>${esc(change.texto)}</summary>
+          <ul class="file-list">${change.archivos.map((f) => `<li><code>${esc(f)}</code></li>`).join('')}</ul>
+          ${change.tipo === 'programa' ? '<p class="hint">Son cambios en el aspecto o el funcionamiento de la web, no en las reseñas. Los hace quien mantiene la web y se suben junto con lo demás.</p>' : ''}
+        </details>
+      </li>`;
+  }
+  if (!change.accion) return `<li class="pending-row"><span>${esc(change.texto)}</span></li>`;
+  const link = change.tipo === 'resena' ? `#/resena/${encodeURIComponent(change.id)}` : `#/literatura-3d/${encodeURIComponent(change.id)}`;
+  return `
+    <li class="pending-row">
+      <span class="pending-badge is-${change.accion}">${ACTION_LABEL[change.accion]}</span>
+      <span class="pending-title">${change.tipo === 'resena' ? 'Reseña' : 'Encuentro'}: <strong>${esc(change.titulo)}</strong></span>
+      <span class="row-actions">
+        ${change.accion !== 'eliminado' ? `<a class="btn btn-sm btn-ghost" href="${link}">Ver</a>` : ''}
+        <button type="button" class="btn btn-sm" data-undo="${esc(change.clave)}">${undoLabel(change)}</button>
+      </span>
+    </li>`;
+}
+
+function contentRows() {
+  const terms = norm(panelQuery).split(/\s+/).filter(Boolean);
+  const items = panelTab === 'resenas'
+    ? sortedReviews().map((r) => ({ clave: `resena:${r.id}`, id: r.id, titulo: r.titulo, sub: r.autor, fecha: r.fecha, img: r.imagen, ver: reviewLink(r), editar: `#/editar/${encodeURIComponent(r.id)}` }))
+    : encounters.map((e) => ({ clave: `encuentro:${e.id}`, id: e.id, titulo: e.titulo, sub: e.lugar, fecha: e.fecha, img: e.portada || 'img/logo.jpg', ver: encounterLink(e), editar: `${encounterLink(e)}/editar` }));
+  const shown = items.filter((it) => terms.every((t) => norm(`${it.titulo} ${it.sub}`).includes(t)));
+  if (!shown.length) return '<p class="hint">Nada coincide con la búsqueda.</p>';
+  return `<ul class="content-list">${shown.map((it) => `
+    <li>
+      <img src="${esc(it.img)}" alt="" loading="lazy">
+      <span class="content-text"><strong>${esc(it.titulo)}</strong><span class="hint">${esc(it.sub || '')} · ${fmtDate(it.fecha)}</span>${pendingBadge(it.clave)}</span>
+      <span class="row-actions">
+        <a class="btn btn-sm btn-ghost" href="${it.ver}">Ver</a>
+        <a class="btn btn-sm" href="${it.editar}">Editar</a>
+        <button type="button" class="btn btn-sm btn-danger" data-delete="${esc(it.clave)}" data-title="${esc(it.titulo)}">Eliminar</button>
+      </span>
+    </li>`).join('')}</ul>`;
+}
+
+function renderPanel() {
+  document.title = `${localMode ? 'Panel de edición' : 'Administración'} · El Barrio`;
+  const missingInstagram = sortedReviews().filter((r) => !r.instagram);
+  const content = pending.filter((c) => c.accion || c.tipo === 'fotos');
+
+  app.innerHTML = `
+    <div class="panel-page fade-in">
+      <h1>${localMode ? 'Panel de edición' : 'Administración'}</h1>
+      ${localMode ? `
+      <section class="form-card panel-card">
+        <div class="panel-head">
+          <h2>Cambios sin subir <span class="hint">${pending.length ? `${pending.length}` : ''}</span></h2>
+          <a class="hint" href="https://elbarriolee.club" target="_blank" rel="noopener">Ver la web publicada ↗</a>
+        </div>
+        ${pending.length ? `
+          <p class="hint">Esto es lo que cambiará en elbarriolee.club al subir. Cualquier cambio se puede deshacer antes.</p>
+          <ul class="pending-list">${pending.map(pendingRow).join('')}</ul>
+          <div class="form-actions panel-actions">
+            ${content.length ? '<button type="button" class="btn btn-ghost btn-danger-text" data-action="discard">Descartar todos los cambios de contenido</button>' : ''}
+            <button type="button" class="btn btn-primary" data-action="publish">Subir cambios a la web</button>
+          </div>`
+    : '<p>Todo está subido: elbarriolee.club muestra lo mismo que este panel.</p>'}
+        ${lastUpload ? `<p class="hint last-upload">Última subida: ${fmtDate(lastUpload, true)}</p>` : ''}
+      </section>` : ''}
+
+      <section class="form-card panel-card">
+        <div class="panel-head">
+          <h2>Contenido</h2>
+          <span class="row-actions">
+            <a class="btn btn-sm btn-primary" href="#/nueva">+ Nueva reseña</a>
+            <a class="btn btn-sm btn-primary" href="#/literatura-3d/nuevo">+ Nuevo encuentro</a>
+          </span>
+        </div>
+        <div class="panel-tools">
+          <div class="pills" role="tablist">
+            <button type="button" class="pill${panelTab === 'resenas' ? ' is-active' : ''}" data-tab="resenas">Reseñas (${reviews.length})</button>
+            <button type="button" class="pill${panelTab === 'encuentros' ? ' is-active' : ''}" data-tab="encuentros">Encuentros (${encounters.length})</button>
+          </div>
+          <input type="search" class="panel-search" placeholder="Buscar por título, autor o lugar…" value="${esc(panelQuery)}" aria-label="Buscar en el contenido">
+        </div>
+        <div class="content-rows">${contentRows()}</div>
+      </section>
+
+      ${missingInstagram.length ? `
+      <section class="form-card panel-card admin-todo">
+        <h2>Reseñas sin enlace a Instagram <span class="hint">${missingInstagram.length} de ${reviews.length}</span></h2>
+        <p>En estas, el botón de comentar lleva al perfil en lugar de a su publicación. Pulsa una para editarla y pegar el enlace.</p>
+        <ul>${missingInstagram.map((r) => `<li><a href="#/editar/${encodeURIComponent(r.id)}">${esc(r.titulo)}</a> <span class="hint">${fmtDate(r.fecha)}</span></li>`).join('')}</ul>
+      </section>` : ''}
+    </div>`;
+
+  const rows = app.querySelector('.content-rows');
+  const search = app.querySelector('.panel-search');
+  search.addEventListener('input', () => {
+    panelQuery = search.value;
+    rows.innerHTML = contentRows();
+  });
+  app.querySelectorAll('[data-tab]').forEach((tab) => tab.addEventListener('click', () => {
+    panelTab = tab.dataset.tab;
+    app.querySelectorAll('[data-tab]').forEach((t) => t.classList.toggle('is-active', t === tab));
+    rows.innerHTML = contentRows();
+  }));
+
+}
+
+async function refreshPanel() {
+  const y = window.scrollY;
+  await Promise.all([loadReviews(), loadEncounters(), localMode ? loadPending() : null]);
+  if (parseHash().parts[0] !== 'admin') return;
+  renderPanel();
+  window.scrollTo(0, y);
+}
+
+async function deleteEntry(clave, titulo) {
+  const [tipo, id] = [clave.slice(0, clave.indexOf(':')), clave.slice(clave.indexOf(':') + 1)];
+  const what = tipo === 'resena' ? 'la reseña' : 'el encuentro';
+  const note = localMode
+    ? '\n\nDesaparecerá de este panel ahora y de la web al pulsar «Subir cambios». Hasta entonces se puede recuperar desde «Cambios sin subir».'
+    : '\n\nNo se puede deshacer.';
+  if (!confirm(`¿Eliminar ${what} «${titulo}» con sus fotos?${note}`)) return false;
+  await api('DELETE', `/api/${tipo === 'resena' ? 'resenas' : 'encuentros'}/${encodeURIComponent(id)}`);
+  toast(tipo === 'resena' ? 'Reseña eliminada' : 'Encuentro eliminado');
+  return true;
+}
+
+async function panelClick(ev) {
+  const undo = ev.target.closest('[data-undo]');
+  const del = ev.target.closest('[data-delete]');
+  const discard = ev.target.closest('[data-action="discard"]');
+  try {
+    if (undo) {
+      const change = pendingFor(undo.dataset.undo);
+      if (!change || !confirm(undoQuestion(change))) return;
+      undo.disabled = true;
+      const { mensaje } = await api('POST', '/api/publicar/deshacer', { clave: change.clave });
+      toast(mensaje);
+    } else if (del) {
+      del.disabled = true;
+      if (!await deleteEntry(del.dataset.delete, del.dataset.title)) {
+        del.disabled = false;
+        return;
+      }
+    } else if (discard) {
+      if (!confirm('¿Descartar todos los cambios en reseñas, encuentros y fotos?\n\nTodo volverá a estar exactamente como en la web. No se puede deshacer.')) return;
+      await api('POST', '/api/publicar/descartar');
+      toast('Cambios descartados: todo está como en la web');
+    } else {
+      return;
+    }
+    await refreshPanel();
+  } catch (err) {
+    toast(err.message, true);
+    await refreshPanel();
+  }
+}
+
 // ---------- Administración ----------
 
 function renderNotFound() {
@@ -1274,34 +1508,8 @@ function renderLogin(volver) {
   const next = volver && volver.startsWith('#/') && !volver.startsWith('#/admin') ? volver : '';
 
   if (admin) {
-    const missingInstagram = sortedReviews().filter((r) => !r.instagram);
-    if (next) {
-      location.hash = next;
-      return;
-    }
-    app.innerHTML = `
-      <div class="form-page login-page fade-in">
-        <h1>Administración</h1>
-        <div class="form-card">
-          <p>Has entrado como administrador. Mientras la sesión esté abierta verás en la web los botones para:</p>
-          <ul class="admin-perms">
-            <li>Publicar reseñas y encuentros nuevos.</li>
-            <li>Editar o eliminar reseñas y encuentros de Literatura en 3D.</li>
-            <li>Enlazar cada reseña con su publicación de Instagram, donde comentan los lectores.</li>
-          </ul>
-          <div class="form-actions">
-            <a class="btn btn-primary" href="#/nueva">Nueva reseña</a>
-            <a class="btn btn-primary" href="#/literatura-3d/nuevo">Nuevo encuentro</a>
-            <a class="btn" href="#/">Ir a la portada</a>
-          </div>
-        </div>
-        ${missingInstagram.length ? `
-        <div class="form-card admin-todo">
-          <h2>Reseñas sin enlace a Instagram <span class="hint">${missingInstagram.length} de ${reviews.length}</span></h2>
-          <p>En estas, el botón de comentar lleva al perfil en lugar de a su publicación. Pulsa una para editarla y pegar el enlace.</p>
-          <ul>${missingInstagram.map((r) => `<li><a href="#/editar/${encodeURIComponent(r.id)}">${esc(r.titulo)}</a> <span class="hint">${fmtDate(r.fecha)}</span></li>`).join('')}</ul>
-        </div>` : ''}
-      </div>`;
+    if (next) location.hash = next;
+    else renderPanel();
     return;
   }
 
@@ -1354,6 +1562,17 @@ function start() {
       app.innerHTML = `<div class="empty"><h2>No se pudo conectar con el servidor</h2><p>Vuelve a intentarlo dentro de un momento.</p></div>`;
     });
 }
+
+// Botones del panel (deshacer, eliminar, descartar): un único escuchador, aunque el panel se repinte.
+app.addEventListener('click', (ev) => {
+  if (parseHash().parts[0] === 'admin' && admin) panelClick(ev);
+});
+
+// Delegado: el botón está en la barra verde y también en el panel, que se vuelve a pintar.
+document.addEventListener('click', (ev) => {
+  const button = ev.target.closest('[data-action="publish"]');
+  if (button) publishChanges(button);
+});
 
 document.querySelectorAll('[data-action="logout"]').forEach((btn) => btn.addEventListener('click', async () => {
   try {

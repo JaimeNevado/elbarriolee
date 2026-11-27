@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "contrasena": "node scripts/contrasena.js",
-    "web-publica": "node scripts/web-publica.js"
+    "web-publica": "node scripts/web-publica.js",
+    "importar-enlaces": "node scripts/importar-enlaces.js",
+    "panel": "ADMIN_LOCAL=1 node server.js"
   },
   "engines": {
     "node": ">=18"

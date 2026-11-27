@@ -16,3 +16,6 @@ _site/
 
 node_modules/
 .DS_Store
+
+# Copia de seguridad que deja npm run importar-enlaces
+data/resenas.json.antes-de-enlaces

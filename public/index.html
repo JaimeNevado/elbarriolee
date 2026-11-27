@@ -32,7 +32,11 @@
       <div class="wrap admin-bar-inner">
         <span class="admin-bar-label"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>
           <strong>Modo administrador</strong><span class="admin-bar-hint">Puedes publicar, editar y borrar. Los visitantes no ven estos botones.</span></span>
-        <span class="admin-bar-actions"><a href="#/admin">Panel</a><button type="button" data-action="logout">Cerrar sesión</button></span>
+        <span class="admin-bar-actions">
+          <a href="#/admin">Panel</a>
+          <button type="button" class="publish-btn" data-action="publish" data-local-only hidden>Subir cambios a la web <span class="publish-count" hidden></span></button>
+          <button type="button" data-action="logout" data-remote-only>Cerrar sesión</button>
+        </span>
       </div>
     </div>
   </header>

@@ -2,13 +2,27 @@
 
 Web de reseñas y encuentros del club. Se administra en el ordenador del administrador y se publica en GitHub Pages. No necesita base de datos ni instalar dependencias: solo Node 18 o superior.
 
-## Arrancar
+## Panel de edición (lo normal)
 
-```
-npm start
-```
+Doble clic en **«El Barrio - Panel»** del escritorio. Arranca la web en este ordenador y abre el panel en Chrome, sin contraseña:
 
-Después abre <http://localhost:3000>. Esta es la copia de trabajo, con administración. Para pararla, pulsa `Ctrl + C` en la terminal.
+1. Crea o edita reseñas y encuentros con los botones de la barra verde y de cada página.
+2. Cuando esté todo listo, pulsa **«Subir cambios a la web»**. Antes de subir enseña la lista de cambios; al confirmar, se suben a GitHub y elbarriolee.club se actualiza en uno o dos minutos.
+
+Mientras no pulses el botón, nada de lo que cambies se ve en la web. El número rojo del botón indica cuántos cambios hay pendientes.
+
+- Si el icono no está, se crea con `bash scripts/crear-app.sh`.
+- El panel se queda funcionando en segundo plano hasta que se apaga el ordenador; volver a pulsar el icono solo abre la ventana.
+- Si algo falla, los detalles quedan en `~/Library/Logs/elbarrio-panel.log`.
+- Solo responde a este ordenador (`localhost`): ni otros equipos de la red ni otras webs pueden usarlo.
+
+## Arrancar a mano (desarrollo)
+
+| Orden | Para qué |
+|---|---|
+| `npm run panel` | El panel sin contraseña en <http://localhost:3000>. |
+| `npm start` | La web local con contraseña de administración. |
+| `npm run web-publica` | Genera en `_site/` la versión que se publica. |
 
 ## Dónde se guarda todo
 
@@ -45,7 +59,7 @@ Protecciones incluidas: el servidor comprueba la sesión en cada operación (ocu
 La web pública es una versión sin servidor ni administración, que GitHub Pages sirve como archivos fijos. Se genera sola:
 
 1. Haz los cambios en la copia local (`npm start` → modo administrador).
-2. Sube los cambios a GitHub:
+2. Sube los cambios a GitHub con el botón «Subir cambios a la web» del panel o, a mano:
    ```
    git add -A && git commit -m "Nueva reseña" && git push
    ```

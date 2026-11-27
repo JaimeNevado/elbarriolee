@@ -3,6 +3,7 @@
 // Leer es público; publicar, editar y borrar opiniones exige la contraseña de administración.
 
 const http = require('http');
+const { execFile } = require('child_process');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
@@ -13,6 +14,14 @@ const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 // Detrás de un proxy con HTTPS (Render, Railway, nginx…) la IP real y el protocolo llegan en cabeceras.
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+// Panel local (npm run panel o el icono del escritorio): quien use este ordenador edita sin contraseña.
+// Solo se permite escuchando en el propio ordenador; la web pública es la de GitHub Pages.
+const LOCAL_ADMIN = process.env.ADMIN_LOCAL === '1';
+const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
+if (LOCAL_ADMIN && !LOOPBACK.includes(HOST)) {
+  console.error('ADMIN_LOCAL=1 solo puede usarse con HOST=127.0.0.1.');
+  process.exit(1);
+}
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 const IMAGES_DIR = path.join(DATA_DIR, 'imagenes');
@@ -353,6 +362,7 @@ function sessionToken(req) {
 }
 
 function isAdmin(req) {
+  if (LOCAL_ADMIN) return true;
   const token = sessionToken(req);
   const expires = token && sessions.get(token);
   if (!expires) return false;
@@ -401,7 +411,7 @@ const loginLimit = limiter(5, 15 * 60 * 1000);
 const opinionLimit = limiter(5, 10 * 60 * 1000);
 
 async function handleAdmin(req, res, action) {
-  if (!action && req.method === 'GET') return send(res, 200, { admin: isAdmin(req), configurada: Boolean(adminSecret()) });
+  if (!action && req.method === 'GET') return send(res, 200, { admin: isAdmin(req), local: LOCAL_ADMIN, configurada: LOCAL_ADMIN || Boolean(adminSecret()) });
   if (action === 'entrar' && req.method === 'POST') {
     const ip = clientIp(req);
     if (loginLimit.blocked(ip)) throw httpError(429, 'Demasiados intentos. Espera 15 minutos y vuelve a probar.');
@@ -422,6 +432,212 @@ async function handleAdmin(req, res, action) {
     if (token) sessions.delete(token);
     res.setHeader('Set-Cookie', sessionCookie(req, '', 0));
     return send(res, 200, { admin: false });
+  }
+  throw httpError(405, 'Método no permitido.');
+}
+
+// ---------- Subir cambios a la web (git) ----------
+
+// La web pública se regenera en GitHub cada vez que llega un cambio a main (ver .github/workflows/pages.yml).
+function git(args, timeout = 60000) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd: __dirname, timeout, maxBuffer: 20 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        err.output = `${stdout}${stderr}`.trim();
+        reject(err);
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
+}
+
+async function committedList(file) {
+  try {
+    return JSON.parse(await git(['show', `HEAD:data/${file}`]));
+  } catch {
+    return [];
+  }
+}
+
+// Qué se puede deshacer de cada tipo de contenido y qué archivos usa cada entrada.
+const CONTENT = {
+  resena: {
+    file: 'resenas.json',
+    load: () => loadReviews(),
+    path: () => DB_FILE,
+    labels: { nuevo: 'Nueva reseña', editado: 'Reseña editada', eliminado: 'Reseña eliminada' },
+    media: (r) => [r.imagen, ...(r.galeria || [])].filter(Boolean).map((url) => path.join(IMAGES_DIR, url.slice('/imagenes/'.length))),
+    folder: (id) => path.join(IMAGES_DIR, id),
+    sort: () => {},
+  },
+  encuentro: {
+    file: 'encuentros.json',
+    load: () => loadList(ENCOUNTERS_FILE),
+    path: () => ENCOUNTERS_FILE,
+    labels: { nuevo: 'Nuevo encuentro', editado: 'Encuentro editado', eliminado: 'Encuentro eliminado' },
+    media: (e) => (e.medios || []).flatMap((m) => [m.src, m.poster]).filter(Boolean).map(encounterFile).filter(Boolean),
+    folder: (id) => path.join(ENCOUNTERS_DIR, id),
+    sort: (list) => list.sort((a, b) => b.fecha.localeCompare(a.fecha)),
+  },
+};
+
+async function changedFiles() {
+  const status = (await git(['status', '--porcelain', '--untracked-files=all'])).split('\n').filter(Boolean);
+  return status.map((line) => line.slice(3).replace(/^"|"$/g, ''));
+}
+
+// Lista de lo que cambiaría en la web, entrada a entrada, para enseñarla antes de subir y poder deshacerla.
+async function pendingChanges() {
+  const files = await changedFiles();
+  const changes = [];
+  const owned = new Set();
+  for (const [tipo, kind] of Object.entries(CONTENT)) {
+    const current = await kind.load();
+    if (!files.includes(`data/${kind.file}`)) {
+      current.forEach((item) => kind.media(item).forEach((f) => owned.add(path.relative(__dirname, f))));
+      continue;
+    }
+    const before = new Map((await committedList(kind.file)).map((x) => [x.id, x]));
+    const after = new Map(current.map((x) => [x.id, x]));
+    const add = (accion, item) => changes.push({
+      clave: `${tipo}:${item.id}`, tipo, accion, id: item.id, titulo: item.titulo, texto: `${kind.labels[accion]}: ${item.titulo}`,
+    });
+    for (const [id, item] of after) {
+      if (!before.has(id)) add('nuevo', item);
+      else if (JSON.stringify(before.get(id)) !== JSON.stringify(item)) add('editado', item);
+    }
+    for (const [id, item] of before) if (!after.has(id)) add('eliminado', item);
+    // Las fotos de las entradas cambiadas van con su entrada; así no se cuentan dos veces.
+    for (const item of [...after.values(), ...before.values()]) kind.media(item).forEach((f) => owned.add(path.relative(__dirname, f)));
+  }
+  const loose = files.filter((f) => /^data\/(imagenes|encuentros)\//.test(f) && !owned.has(f));
+  if (loose.length) {
+    changes.push({ clave: 'fotos', tipo: 'fotos', archivos: loose, texto: `${loose.length} ${loose.length === 1 ? 'foto o vídeo suelto' : 'fotos y vídeos sueltos'}` });
+  }
+  const program = files.filter((f) => !/^data\//.test(f));
+  if (program.length) {
+    changes.push({
+      clave: 'programa', tipo: 'programa', archivos: program,
+      texto: `${program.length} ${program.length === 1 ? 'archivo' : 'archivos'} del diseño o del programa de la web`,
+    });
+  }
+  // Cambios ya guardados en un intento anterior que no llegó a subirse (por ejemplo, sin internet).
+  const ahead = Number((await git(['rev-list', '--count', 'origin/main..HEAD']).catch(() => '0')).trim());
+  if (ahead) {
+    changes.push({ clave: 'envios', tipo: 'envios', texto: `Cambios de ${ahead === 1 ? 'un envío anterior' : `${ahead} envíos anteriores`} que no llegaron a subirse` });
+  }
+  return { changes, dirty: files.length > 0 };
+}
+
+async function lastPublished() {
+  const out = await git(['log', '-1', '--format=%cI', 'origin/main']).catch(() => '');
+  return out.trim() || null;
+}
+
+// Operaciones que tocan datos y git: una detrás de otra, nunca a la vez que una edición.
+function exclusive(fn) {
+  const run = queue.then(fn);
+  queue = run.catch(() => {});
+  return run;
+}
+
+async function inHead(file) {
+  return git(['cat-file', '-e', `HEAD:${path.relative(__dirname, file)}`]).then(() => true, () => false);
+}
+
+// Devuelve una entrada a como está en la web: la nueva se borra, la editada o eliminada se recupera,
+// con sus fotos y vídeos.
+async function undoChange(tipo, id) {
+  const kind = CONTENT[tipo];
+  if (!kind) throw httpError(400, 'Ese cambio no se puede deshacer desde aquí.');
+  const head = await committedList(kind.file);
+  const before = head.find((x) => x.id === id);
+  const list = await kind.load();
+  const index = list.findIndex((x) => x.id === id);
+  const current = list[index];
+  if (!before && !current) throw httpError(404, 'No hay ningún cambio que deshacer en esa entrada.');
+
+  if (index !== -1) list.splice(index, 1);
+  if (before) list.splice(index !== -1 ? index : Math.min(head.indexOf(before), list.length), 0, before);
+  kind.sort(list);
+  await saveList(list, kind.path());
+  // Si ya no queda ningún cambio, se deja el archivo idéntico al de la web (mismo formato incluido).
+  if (JSON.stringify(list) === JSON.stringify(head)) await git(['checkout', 'HEAD', '--', `data/${kind.file}`]);
+
+  const files = new Set([...(current ? kind.media(current) : []), ...(before ? kind.media(before) : [])]);
+  for (const file of files) {
+    if (await inHead(file)) await git(['checkout', 'HEAD', '--', path.relative(__dirname, file)]);
+    else await fsp.unlink(file).catch(() => {});
+  }
+  // Carpeta de fotos de una entrada nueva: se quita entera (solo lo que no está ya en la web).
+  if (!before) {
+    const folder = kind.folder(id);
+    if (fs.existsSync(folder)) await git(['clean', '-fdq', '--', path.relative(__dirname, folder)]);
+    await fsp.rmdir(folder).catch(() => {});
+  }
+  return before ? `Vuelve a estar como en la web: ${before.titulo}` : `Borrado del todo (no estaba en la web): ${current.titulo}`;
+}
+
+// Deja reseñas, encuentros y fotos exactamente como están en la web. No toca el programa.
+async function discardAll() {
+  await git(['checkout', 'HEAD', '--', 'data']);
+  await git(['clean', '-fdq', '--', 'data']);
+}
+
+let publishing = false;
+async function publish() {
+  if (publishing) throw httpError(409, 'Ya se están subiendo los cambios. Espera un momento.');
+  publishing = true;
+  try {
+    await queue; // que no quede ninguna edición a medio guardar
+    const { changes, dirty } = await pendingChanges();
+    if (!changes.length) throw httpError(409, 'No hay cambios pendientes de subir.');
+    if (dirty) {
+      await git(['add', '-A']);
+      const fecha = new Date().toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
+      await git(['commit', '-m', `Cambios desde el panel (${fecha})\n\n${changes.map((c) => `- ${c.texto}`).join('\n')}`]);
+    }
+    try {
+      await git(['push', 'origin', 'HEAD'], 15 * 60 * 1000);
+    } catch {
+      // Si alguien subió cambios desde otro ordenador, se incorporan y se vuelve a intentar.
+      try {
+        await git(['pull', '--rebase', 'origin', 'main'], 5 * 60 * 1000);
+      } catch (err) {
+        await git(['rebase', '--abort']).catch(() => {});
+        console.error(err.output);
+        throw httpError(500, 'Hay cambios en GitHub que chocan con los de este ordenador. Los tuyos están guardados aquí; pide ayuda para juntarlos.');
+      }
+      try {
+        await git(['push', 'origin', 'HEAD'], 15 * 60 * 1000);
+      } catch (err) {
+        console.error(err.output);
+        throw httpError(502, 'No se pudo conectar con GitHub. Comprueba la conexión a internet y vuelve a intentarlo: los cambios están guardados.');
+      }
+    }
+    return changes;
+  } finally {
+    publishing = false;
+  }
+}
+
+async function handlePublish(req, res, action) {
+  requireAdmin(req);
+  if (!action && req.method === 'GET') {
+    const [{ changes }, ultima] = await Promise.all([pendingChanges(), lastPublished()]);
+    return send(res, 200, { cambios: changes, ultimaSubida: ultima });
+  }
+  if (!action && req.method === 'POST') return send(res, 200, { cambios: await publish() });
+  if (publishing) throw httpError(409, 'Se están subiendo los cambios. Espera a que termine.');
+  if (action === 'deshacer' && req.method === 'POST') {
+    const body = await readJson(req, MAX_PUBLIC_BODY);
+    const [tipo, ...rest] = String(body.clave || '').split(':');
+    return send(res, 200, { mensaje: await exclusive(() => undoChange(tipo, rest.join(':'))) });
+  }
+  if (action === 'descartar' && req.method === 'POST') {
+    await exclusive(discardAll);
+    return send(res, 200, { ok: true });
   }
   throw httpError(405, 'Método no permitido.');
 }
@@ -500,6 +716,7 @@ async function handleApi(req, res, parts) {
   // parts: ['api', 'resenas', id?, 'opiniones'?, opinionId?]
   const [, resource, id, sub, subId] = parts;
   if (resource === 'admin') return handleAdmin(req, res, id);
+  if (resource === 'publicar') return handlePublish(req, res, id);
   // Todo lo que no sea leer o dejar una opinión queda reservado al administrador.
   const publicWrite = req.method === 'POST' && resource === 'resenas' && sub === 'opiniones' && !subId;
   if (req.method !== 'GET' && !publicWrite) requireAdmin(req);
@@ -599,6 +816,10 @@ const server = http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, `http://${req.headers.host}`);
     const parts = decodeURIComponent(pathname).split('/').filter(Boolean);
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+    // Sin contraseña, solo se atiende a quien escribe localhost: así otra web no puede usar el panel a escondidas.
+    if (LOCAL_ADMIN && !LOOPBACK.includes(String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, ''))) {
+      throw httpError(403, 'Este panel solo funciona en este ordenador.');
+    }
     if (parts[0] === 'api') {
       // Las peticiones que cambian algo solo se aceptan desde la propia web.
       const origin = req.headers.origin;
@@ -621,5 +842,6 @@ fs.mkdirSync(ENCOUNTERS_DIR, { recursive: true });
 server.requestTimeout = 30 * 60 * 1000;
 server.listen(PORT, HOST, () => {
   console.log(`\n  El Barrio está en marcha → http://localhost:${PORT}\n`);
-  if (!adminSecret()) console.log('  Aún no hay contraseña de administración: créala con «npm run contrasena».\n');
+  if (LOCAL_ADMIN) console.log('  Panel de edición sin contraseña (solo en este ordenador).\n');
+  else if (!adminSecret()) console.log('  Aún no hay contraseña de administración: créala con «npm run contrasena».\n');
 });
