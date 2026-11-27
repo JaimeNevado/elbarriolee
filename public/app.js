@@ -907,7 +907,7 @@ function renderEncounterForm(id) {
     const pending = items.filter((it) => it.file);
     let saved = null;
     try {
-      button.textContent = 'Guardando…';
+      button.textContent = gallery.some((p) => p.data) || cover.data ? 'Subiendo fotos…' : 'Guardando…';
       saved = existing
         ? await api('PUT', `/api/encuentros/${encodeURIComponent(existing.id)}`, {
           ...payload, medios: items.filter((it) => !it.file).map((it) => it.src), portada: cover && !cover.file ? coverOf(cover) : undefined,
@@ -1063,7 +1063,9 @@ function renderForm(existing, missingId) {
   document.title = `${existing ? 'Editar reseña' : 'Nueva reseña'} · El Barrio`;
   const r = existing || { fecha: today(), temas: [] };
   let temas = [...(r.temas || [])];
-  let imageData = null;
+  // Portada y galería: cada foto es una que ya tiene la reseña ({ src }) o una nueva ({ data }).
+  let cover = r.imagen ? { src: r.imagen } : null;
+  let gallery = (r.galeria || []).map((src) => ({ src }));
 
   const datalist = (key) => `<datalist id="dl-${key}">${distinct(key).map((d) => `<option value="${esc(d.label)}">`).join('')}</datalist>`;
   const input = (name, label, opts = {}) => `
@@ -1081,14 +1083,23 @@ function renderForm(existing, missingId) {
       <form class="form-layout" novalidate>
         <div>
           <div class="dropzone${r.imagen ? ' has-image' : ''}">
-            <input type="file" accept="image/*" aria-label="Imagen de la reseña">
+            <input type="file" accept="image/*" multiple aria-label="Portada de la reseña">
             ${r.imagen ? `<img src="${esc(r.imagen)}" alt="">` : ''}
             <div class="dz-text">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
-              <strong>Arrastra aquí la imagen</strong>o haz clic para elegirla
+              <strong>Arrastra aquí la portada</strong>o haz clic para elegirla. Si eliges varias fotos, el resto irá a la galería.
             </div>
           </div>
           <p class="dz-change">${r.imagen ? 'Haz clic en la imagen para cambiarla.' : 'JPG, PNG o WebP. Se optimiza automáticamente.'}</p>
+          <div class="review-gallery">
+            <span class="label">Más fotos <span class="hint">Salen en el carrusel, después de la portada</span></span>
+            <div class="gallery-manager"></div>
+            <label class="media-drop">
+              <input type="file" accept="image/*" multiple aria-label="Añadir fotos a la galería">
+              <strong>Añadir fotos</strong>
+              <span>Arrástralas aquí o haz clic. Puedes elegir varias a la vez.</span>
+            </label>
+          </div>
         </div>
 
         <div class="form-card">
@@ -1184,30 +1195,115 @@ function renderForm(existing, missingId) {
   tagInput.addEventListener('blur', () => { if (tagInput.value.trim()) addTag(tagInput.value); });
   renderTags();
 
-  // --- Imagen ---
+  // --- Portada y galería ---
   const dropzone = form.querySelector('.dropzone');
   const fileInput = dropzone.querySelector('input[type="file"]');
-  const showImage = async (file) => {
-    if (!file || !file.type.startsWith('image/')) return toast('Elige un archivo de imagen', true);
-    try {
-      imageData = await optimizeImage(file);
-    } catch {
-      return toast('No hemos podido leer esa imagen', true);
-    }
+  const galleryBox = form.querySelector('.gallery-manager');
+  const galleryDrop = form.querySelector('.review-gallery .media-drop');
+  const galleryInput = galleryDrop.querySelector('input');
+  const preview = (photo) => photo.data || photo.src;
+
+  const drawCover = () => {
     let img = dropzone.querySelector('img');
+    if (!cover) {
+      img?.remove();
+      dropzone.classList.remove('has-image');
+      return;
+    }
     if (!img) {
       img = document.createElement('img');
       img.alt = '';
       dropzone.insertBefore(img, dropzone.querySelector('.dz-text'));
     }
-    img.src = imageData;
+    img.src = preview(cover);
     dropzone.classList.add('has-image');
-    form.querySelector('.dz-change').textContent = 'Haz clic en la imagen para cambiarla.';
+    form.querySelector('.dz-change').textContent = 'Haz clic en la portada para cambiarla.';
   };
-  fileInput.addEventListener('change', () => showImage(fileInput.files[0]));
-  ['dragenter', 'dragover'].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('is-over'); }));
-  ['dragleave', 'drop'].forEach((ev) => dropzone.addEventListener(ev, () => dropzone.classList.remove('is-over')));
-  dropzone.addEventListener('drop', (e) => { e.preventDefault(); showImage(e.dataTransfer.files[0]); });
+
+  const drawGallery = () => {
+    galleryBox.innerHTML = gallery.length ? gallery.map((photo, i) => `
+      <div class="media-tile">
+        <img class="media-thumb" src="${esc(preview(photo))}" alt="Foto ${i + 2}">
+        ${photo.data ? '<span class="media-badge is-new">Nueva</span>' : ''}
+        <button type="button" class="media-remove" data-remove="${i}" aria-label="Quitar foto" title="Quitar">×</button>
+        <span class="media-tools">
+          <button type="button" data-move="${i}" data-dir="-1" ${i === 0 ? 'disabled' : ''} aria-label="Mover a la izquierda" title="Mover a la izquierda">‹</button>
+          <button type="button" data-cover="${i}" title="Usar como portada">Portada</button>
+          <button type="button" data-move="${i}" data-dir="1" ${i === gallery.length - 1 ? 'disabled' : ''} aria-label="Mover a la derecha" title="Mover a la derecha">›</button>
+        </span>
+      </div>`).join('') : '<p class="media-empty">Solo la portada. Añade aquí el resto de fotos de la reseña.</p>';
+  };
+  drawCover();
+  drawGallery();
+
+  const readPhotos = async (files) => {
+    const photos = [];
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) {
+        toast(`«${file.name}» no es una imagen`, true);
+        continue;
+      }
+      try {
+        photos.push({ data: await optimizeImage(file) });
+      } catch {
+        toast(`No hemos podido leer «${file.name}»`, true);
+      }
+    }
+    return photos;
+  };
+  // En la portada: la primera foto la sustituye y, si hay más, van a la galería.
+  const setCover = async (files) => {
+    const photos = await readPhotos([...files]);
+    if (!photos.length) return;
+    cover = photos[0];
+    gallery.push(...photos.slice(1));
+    drawCover();
+    drawGallery();
+  };
+  const addToGallery = async (files) => {
+    const photos = await readPhotos([...files]);
+    gallery.push(...photos);
+    if (!cover && gallery.length) cover = gallery.shift();
+    drawCover();
+    drawGallery();
+  };
+
+  fileInput.addEventListener('change', () => {
+    setCover(fileInput.files);
+    fileInput.value = '';
+  });
+  galleryInput.addEventListener('change', () => {
+    addToGallery(galleryInput.files);
+    galleryInput.value = '';
+  });
+  for (const [zone, handler] of [[dropzone, setCover], [galleryDrop, addToGallery]]) {
+    ['dragenter', 'dragover'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('is-over'); }));
+    ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, () => zone.classList.remove('is-over')));
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      handler(e.dataTransfer.files);
+    });
+  }
+  galleryBox.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    if (btn.dataset.remove) gallery.splice(Number(btn.dataset.remove), 1);
+    if (btn.dataset.move) {
+      const i = Number(btn.dataset.move);
+      const j = i + Number(btn.dataset.dir);
+      [gallery[i], gallery[j]] = [gallery[j], gallery[i]];
+    }
+    if (btn.dataset.cover) {
+      // La portada anterior pasa a ocupar el sitio de la foto elegida.
+      const i = Number(btn.dataset.cover);
+      const chosen = gallery[i];
+      if (cover) gallery[i] = cover;
+      else gallery.splice(i, 1);
+      cover = chosen;
+      drawCover();
+    }
+    drawGallery();
+  });
 
   // --- Autorrelleno de título y autor desde el texto pegado ---
   const texto = form.querySelector('#f-texto');
@@ -1250,7 +1346,7 @@ function renderForm(existing, missingId) {
       [!String(payload.titulo).trim(), 'el título', '#f-titulo'],
       [!String(payload.autor).trim(), 'el autor', '#f-autor'],
       [!String(payload.texto).trim(), 'el texto de la reseña', '#f-texto'],
-      [!existing && !imageData, 'una imagen', null],
+      [!cover, 'la portada (una imagen)', null],
     ].find(([cond]) => cond);
     if (missing) {
       toast(`Falta ${missing[1]}`, true);
@@ -1262,7 +1358,8 @@ function renderForm(existing, missingId) {
       form.querySelector('#f-anio').focus();
       return;
     }
-    if (imageData) payload.imagen = imageData;
+    payload.imagen = cover.data || cover.src;
+    payload.galeria = gallery.map((photo) => photo.data || photo.src);
 
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;

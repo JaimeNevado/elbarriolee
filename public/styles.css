@@ -616,3 +616,15 @@ button.pill { font: inherit; font-size: .88rem; }
   .content-list li { flex-wrap: wrap; }
   .content-list .row-actions { width: 100%; padding-left: 56px; }
 }
+
+/* ---------- Galería de una reseña (formulario) ---------- */
+.review-gallery { margin-top: 22px; }
+.review-gallery .label { display: block; margin-bottom: 8px; }
+.gallery-manager { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.media-thumb { display: block; width: 100%; aspect-ratio: 4 / 5; object-fit: cover; border-radius: var(--radius-sm); background: var(--surface-2); }
+.media-tools { position: absolute; left: 4px; right: 4px; bottom: 4px; display: flex; gap: 3px; justify-content: space-between; }
+.media-tools button { flex: none; min-width: 24px; height: 24px; padding: 0 6px; border: 0; border-radius: 999px; background: rgba(0, 0, 0, .7); color: #fff; font: inherit; font-size: .72rem; cursor: pointer; }
+.media-tools button[data-cover] { flex: 1; }
+.media-tools button:hover:not(:disabled) { background: var(--accent); }
+.media-tools button:disabled { opacity: .35; cursor: default; }
+.gallery-manager .media-badge.is-new { left: 6px; right: auto; top: 6px; bottom: auto; }

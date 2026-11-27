@@ -29,7 +29,9 @@ const DB_FILE = path.join(DATA_DIR, 'resenas.json');
 const ENCOUNTERS_DIR = path.join(DATA_DIR, 'encuentros');
 const ENCOUNTERS_FILE = path.join(DATA_DIR, 'encuentros.json');
 const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
-const MAX_BODY = 25 * 1024 * 1024;
+// Una reseña con su portada y su galería viaja en una sola petición (las fotos ya llegan reducidas).
+const MAX_BODY = 80 * 1024 * 1024;
+const MAX_GALLERY = 40;
 const MAX_PUBLIC_BODY = 32 * 1024;
 
 const MIME = {
@@ -85,12 +87,56 @@ function mutate(fn, file = DB_FILE) {
   return run;
 }
 
-async function saveImage(dataUrl, baseName) {
+function decodeImage(dataUrl) {
   const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/s.exec(dataUrl || '');
   if (!match) throw httpError(400, 'La imagen no tiene un formato válido (JPG, PNG, WebP o GIF).');
-  const file = `${baseName}-${Date.now().toString(36)}${IMAGE_EXT[match[1]]}`;
-  await fsp.writeFile(path.join(IMAGES_DIR, file), Buffer.from(match[2], 'base64'));
+  return { ext: IMAGE_EXT[match[1]], data: Buffer.from(match[2], 'base64') };
+}
+
+async function saveImage(dataUrl, baseName) {
+  const { ext, data } = decodeImage(dataUrl);
+  const file = `${baseName}-${Date.now().toString(36)}${ext}`;
+  await fsp.writeFile(path.join(IMAGES_DIR, file), data);
   return `/imagenes/${file}`;
+}
+
+// Las fotos de la galería van en una carpeta por reseña: data/imagenes/<id>/.
+async function saveGalleryImage(dataUrl, id) {
+  const { ext, data } = decodeImage(dataUrl);
+  const dir = path.join(IMAGES_DIR, id);
+  await fsp.mkdir(dir, { recursive: true });
+  const file = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}${ext}`;
+  await fsp.writeFile(path.join(dir, file), data);
+  return `/imagenes/${id}/${file}`;
+}
+
+// Portada y galería de una reseña. Cada foto es una que ya tenía la reseña (su dirección) o una nueva
+// (data:…); así se pueden añadir, quitar, reordenar o cambiar la portada en un solo guardado.
+async function resolveReviewImages(body, id, item) {
+  const known = new Set(item ? [item.imagen, ...(item.galeria || [])] : []);
+  const saved = [];
+  const resolve = async (value, asCover) => {
+    if (known.has(value)) return value;
+    if (typeof value !== 'string' || !value.startsWith('data:')) throw httpError(400, 'Una de las fotos no es válida.');
+    const url = asCover ? await saveImage(value, id) : await saveGalleryImage(value, id);
+    saved.push(url);
+    return url;
+  };
+  try {
+    const imagen = body.imagen ? await resolve(body.imagen, true) : item && item.imagen;
+    if (!imagen) throw httpError(400, 'Añade una imagen para ilustrar la reseña.');
+    let galeria = item ? item.galeria || [] : [];
+    if (Array.isArray(body.galeria)) {
+      if (body.galeria.length > MAX_GALLERY) throw httpError(400, `Como mucho ${MAX_GALLERY} fotos además de la portada.`);
+      galeria = [];
+      for (const value of body.galeria) galeria.push(await resolve(value, false));
+      galeria = [...new Set(galeria)].filter((url) => url !== imagen);
+    }
+    return { imagen, galeria, saved };
+  } catch (err) {
+    for (const url of saved) await removeImage(url);
+    throw err;
+  }
 }
 
 async function removeImage(url) {
@@ -729,10 +775,9 @@ async function handleApi(req, res, parts) {
       const body = await readJson(req);
       const review = cleanReview(body);
       const newId = `${slugify(review.titulo)}-${crypto.randomBytes(3).toString('hex')}`;
-      if (!body.imagen) throw httpError(400, 'Añade una imagen para ilustrar la reseña.');
-      const imagen = await saveImage(body.imagen, newId);
+      const { imagen, galeria } = await resolveReviewImages(body, newId, null);
       const created = await mutate((list) => {
-        const item = { id: newId, ...review, imagen, opiniones: [], creado: new Date().toISOString() };
+        const item = { id: newId, ...review, imagen, galeria, opiniones: [], creado: new Date().toISOString() };
         list.push(item);
         return item;
       });
@@ -749,19 +794,23 @@ async function handleApi(req, res, parts) {
     if (req.method === 'PUT') {
       const body = await readJson(req);
       const review = cleanReview(body);
-      const imagen = body.imagen ? await saveImage(body.imagen, id) : null;
-      let oldImage = null;
+      const current = (await loadReviews()).find((r) => r.id === id);
+      if (!current) throw httpError(404, 'Reseña no encontrada.');
+      const { imagen, galeria, saved } = await resolveReviewImages(body, id, current);
+      let unused = [];
       const updated = await mutate((list) => {
         const item = list.find((r) => r.id === id);
         if (!item) throw httpError(404, 'Reseña no encontrada.');
-        if (imagen) {
-          oldImage = item.imagen;
-          item.imagen = imagen;
-        }
-        Object.assign(item, review, { editado: new Date().toISOString() });
+        const before = [item.imagen, ...(item.galeria || [])];
+        Object.assign(item, review, { imagen, galeria, editado: new Date().toISOString() });
+        unused = before.filter((url) => url !== imagen && !galeria.includes(url));
         return item;
+      }).catch(async (err) => {
+        for (const url of saved) await removeImage(url);
+        throw err;
       });
-      await removeImage(oldImage);
+      // Las fotos que se han quitado de la reseña se borran del disco.
+      for (const url of unused) await removeImage(url);
       return send(res, 200, updated);
     }
     if (req.method === 'DELETE') {
