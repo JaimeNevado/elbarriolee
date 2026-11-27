@@ -907,7 +907,7 @@ function renderEncounterForm(id) {
     const pending = items.filter((it) => it.file);
     let saved = null;
     try {
-      button.textContent = gallery.some((p) => p.data) || cover.data ? 'Subiendo fotos…' : 'Guardando…';
+      button.textContent = 'Guardando…';
       saved = existing
         ? await api('PUT', `/api/encuentros/${encodeURIComponent(existing.id)}`, {
           ...payload, medios: items.filter((it) => !it.file).map((it) => it.src), portada: cover && !cover.file ? coverOf(cover) : undefined,
@@ -1363,7 +1363,7 @@ function renderForm(existing, missingId) {
 
     const button = form.querySelector('[type="submit"]');
     button.disabled = true;
-    button.textContent = 'Guardando…';
+    button.textContent = gallery.some((p) => p.data) || cover.data ? 'Subiendo fotos…' : 'Guardando…';
     try {
       const saved = existing
         ? await api('PUT', `/api/resenas/${encodeURIComponent(existing.id)}`, payload)
