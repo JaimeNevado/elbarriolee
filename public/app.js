@@ -5,6 +5,7 @@ const NONE = 'Sin especificar';
 const app = document.getElementById('app');
 let reviews = [];
 let encounters = [];
+let authors = [];
 // Solo cambia qué botones se ven; el servidor comprueba la sesión en cada operación.
 let admin = false;
 // Panel local (icono del escritorio): sin contraseña y con el botón «Subir cambios a la web».
@@ -135,6 +136,19 @@ async function loadEncounters() {
   encounters = STATIC ? await staticData('datos/encuentros.json') : await api('GET', '/api/encuentros');
 }
 
+async function loadAuthors() {
+  authors = STATIC ? await staticData('datos/autores.json').catch(() => []) : await api('GET', '/api/autores');
+}
+
+// Igual que en el servidor: la semblanza de cada autor se guarda con este identificador.
+function slugify(text) {
+  return String(text).normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'resena';
+}
+
+const authorBio = (name) => authors.find((a) => a.id === slugify(name));
+
 async function staticData(url) {
   const res = await fetch(url, { cache: 'no-cache' });
   if (!res.ok) throw new Error('No se pudieron cargar los datos.');
@@ -230,7 +244,7 @@ function setActiveNav(name) {
 }
 
 // Rutas de edición: sin sesión se muestra el acceso y, al entrar, se vuelve a la misma página.
-const isAdminRoute = (parts) => parts[0] === 'nueva' || parts[0] === 'editar'
+const isAdminRoute = (parts) => parts[0] === 'nueva' || parts[0] === 'editar' || parts[0] === 'autor'
   || (parts[0] === 'literatura-3d' && (parts[1] === 'nuevo' || parts[2] === 'editar'));
 
 function route() {
@@ -239,6 +253,7 @@ function route() {
   else if (parts[0] === 'admin') renderLogin(params.get('volver'));
   else if (isAdminRoute(parts) && !admin) renderLogin(location.hash);
   else if (parts[0] === 'resena' && parts[1]) renderDetail(parts[1]);
+  else if (parts[0] === 'autor' && parts[1]) renderAuthorForm(parts[1]);
   else if (parts[0] === 'grial') renderGrail();
   else if (parts[0] === 'literatura-3d' && parts[1] === 'nuevo') renderEncounterForm(null);
   else if (parts[0] === 'literatura-3d' && parts[1] && parts[2] === 'editar') renderEncounterForm(parts[1]);
@@ -313,6 +328,23 @@ function renderHome(params) {
   renderResults(params);
 }
 
+// Encabezado de la página de un autor: su semblanza, tal como la publica su editorial.
+function authorBlock(name) {
+  const bio = authorBio(name);
+  const edit = admin ? `<a class="btn btn-sm" href="#/autor/${encodeURIComponent(slugify(name))}/editar">${bio ? 'Editar semblanza' : 'Añadir semblanza'}</a>` : '';
+  if (!bio) return admin ? `<section class="author-bio is-empty fade-in"><p>${esc(name)} aún no tiene semblanza.</p>${edit}</section>` : '';
+  const source = bio.editorial || bio.url
+    ? `<p class="bio-source">Semblanza publicada por ${bio.url ? `<a href="${esc(bio.url)}" target="_blank" rel="noopener">${esc(bio.editorial || 'su editorial')}</a>` : esc(bio.editorial)}</p>`
+    : '';
+  return `
+    <section class="author-bio fade-in">
+      <span class="badge">Sobre el autor</span>
+      <h2>${esc(bio.autor)}</h2>
+      <div class="prose">${bio.semblanza.split(/\n{2,}/).map((p) => `<p>${esc(p).replace(/\n/g, '<br>')}</p>`).join('')}</div>
+      <div class="bio-foot">${source}${edit}</div>
+    </section>`;
+}
+
 function activeFilters(params) {
   return Object.keys(GROUPS).filter((k) => params.has(k)).map((k) => [k, params.get(k)]);
 }
@@ -338,6 +370,8 @@ function renderResults(params) {
           ${esc(GROUPS[k].label)}: <b>${esc(v)}</b><span aria-hidden="true">×</span></a>`).join('')}
       ${q ? `<a class="filter-chip" href="${withParams(params, { q: null, page: null })}" title="Quitar búsqueda">Búsqueda: <b>${esc(params.get('q'))}</b><span aria-hidden="true">×</span></a>` : ''}
     </div>` : '';
+
+  if (params.get('autor')) filtersEl.insertAdjacentHTML('beforeend', authorBlock(params.get('autor')));
 
   const results = document.getElementById('results');
 
@@ -1409,6 +1443,75 @@ async function scaledCanvas(file, max) {
   }
 }
 
+// ---------- Semblanzas de autores ----------
+
+function reviewedAuthors() {
+  const byId = new Map();
+  for (const r of sortedReviews()) {
+    const id = slugify(r.autor);
+    if (!byId.has(id)) byId.set(id, { id, autor: r.autor, editorial: r.editorial || '', libros: 0 });
+    byId.get(id).libros++;
+  }
+  return [...byId.values()].sort((a, b) => a.autor.localeCompare(b.autor, 'es'));
+}
+
+function renderAuthorForm(id) {
+  setActiveNav('');
+  const bio = authors.find((a) => a.id === id);
+  const known = reviewedAuthors().find((a) => a.id === id);
+  if (!bio && !known) return renderNotFound();
+  const a = bio || { autor: known.autor, semblanza: '', editorial: known.editorial, url: '' };
+  const back = filterLink('autor', known ? known.autor : a.autor);
+  document.title = `Semblanza de ${a.autor} · El Barrio`;
+
+  app.innerHTML = `
+    <div class="form-page fade-in">
+      <a class="back" href="${back}">← Volver a ${esc(a.autor)}</a>
+      <h1>Semblanza de ${esc(a.autor)}</h1>
+      <p>Encabeza la página del autor. Copia la que publica su editorial e indica de dónde sale.</p>
+      <form class="form-card encounter-form" novalidate>
+        <div class="field"><label for="b-texto">Semblanza <span class="req">*</span>
+          <span class="hint">Deja una línea en blanco entre párrafos.</span></label>
+          <textarea id="b-texto" name="semblanza" class="tall">${esc(a.semblanza)}</textarea></div>
+        <div class="field-row">
+          <div class="field"><label for="b-ed">Editorial</label>
+            <input id="b-ed" name="editorial" maxlength="120" value="${esc(a.editorial)}" autocomplete="off"></div>
+          <div class="field"><label for="b-url">Página de donde se ha tomado</label>
+            <input id="b-url" name="url" type="url" value="${esc(a.url)}" placeholder="https://…" autocomplete="off"></div>
+        </div>
+        <div class="form-actions">
+          ${bio ? '<button type="button" class="btn btn-ghost btn-danger-text form-delete" data-form-delete>Eliminar semblanza</button>' : ''}
+          <a class="btn btn-ghost" href="${back}">Cancelar</a>
+          <button class="btn btn-primary" type="submit">Guardar semblanza</button>
+        </div>
+      </form>
+    </div>`;
+
+  const form = app.querySelector('form');
+  form.querySelector('[data-form-delete]')?.addEventListener('click', async () => {
+    try {
+      if (await deleteEntry(`autor:${id}`, a.autor)) location.hash = back;
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const data = new FormData(form);
+    const semblanza = String(data.get('semblanza') || '').trim();
+    if (!semblanza) return toast('Escribe la semblanza', true);
+    try {
+      await api('PUT', `/api/autores/${encodeURIComponent(id)}`, {
+        autor: a.autor, semblanza, editorial: data.get('editorial'), url: data.get('url'),
+      });
+      toast('Semblanza guardada');
+      location.hash = back;
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+}
+
 // ---------- Panel ----------
 
 let panelTab = 'resenas';
@@ -1444,11 +1547,11 @@ function pendingRow(change) {
       </li>`;
   }
   if (!change.accion) return `<li class="pending-row"><span>${esc(change.texto)}</span></li>`;
-  const link = change.tipo === 'resena' ? `#/resena/${encodeURIComponent(change.id)}` : `#/literatura-3d/${encodeURIComponent(change.id)}`;
+  const link = { resena: `#/resena/${encodeURIComponent(change.id)}`, encuentro: `#/literatura-3d/${encodeURIComponent(change.id)}`, autor: filterLink('autor', change.titulo) }[change.tipo];
   return `
     <li class="pending-row">
       <span class="pending-badge is-${change.accion}">${ACTION_LABEL[change.accion]}</span>
-      <span class="pending-title">${change.tipo === 'resena' ? 'Reseña' : 'Encuentro'}: <strong>${esc(change.titulo)}</strong></span>
+      <span class="pending-title">${{ resena: 'Reseña', encuentro: 'Encuentro', autor: 'Semblanza' }[change.tipo]}: <strong>${esc(change.titulo)}</strong></span>
       <span class="row-actions">
         ${change.accion !== 'eliminado' ? `<a class="btn btn-sm btn-ghost" href="${link}">Ver</a>` : ''}
         <button type="button" class="btn btn-sm" data-undo="${esc(change.clave)}">${undoLabel(change)}</button>
@@ -1461,16 +1564,26 @@ function contentRows() {
   const items = panelTab === 'resenas'
     ? sortedReviews().map((r) => ({ clave: `resena:${r.id}`, id: r.id, titulo: r.titulo, sub: r.autor, fecha: r.fecha, img: r.imagen, ver: reviewLink(r), editar: `#/editar/${encodeURIComponent(r.id)}` }))
     : encounters.map((e) => ({ clave: `encuentro:${e.id}`, id: e.id, titulo: e.titulo, sub: e.lugar, fecha: e.fecha, img: e.portada || 'img/logo.jpg', ver: encounterLink(e), editar: `${encounterLink(e)}/editar` }));
+  if (panelTab === 'autores') {
+    items.splice(0, items.length, ...reviewedAuthors().map((au) => {
+      const bio = authorBio(au.autor);
+      return {
+        clave: `autor:${au.id}`, titulo: au.autor, sub: `${au.libros} ${au.libros === 1 ? 'libro' : 'libros'} · ${bio ? 'con semblanza' : 'sin semblanza'}`,
+        img: (sortedReviews().find((r) => r.autor === au.autor) || {}).imagen, ver: filterLink('autor', au.autor),
+        editar: `#/autor/${encodeURIComponent(au.id)}/editar`, noDelete: !bio, editLabel: bio ? 'Editar' : 'Añadir semblanza',
+      };
+    }));
+  }
   const shown = items.filter((it) => terms.every((t) => norm(`${it.titulo} ${it.sub}`).includes(t)));
   if (!shown.length) return '<p class="hint">Nada coincide con la búsqueda.</p>';
   return `<ul class="content-list">${shown.map((it) => `
     <li>
       <img src="${esc(it.img)}" alt="" loading="lazy">
-      <span class="content-text"><strong>${esc(it.titulo)}</strong><span class="hint">${esc(it.sub || '')} · ${fmtDate(it.fecha)}</span>${pendingBadge(it.clave)}</span>
+      <span class="content-text"><strong>${esc(it.titulo)}</strong><span class="hint">${esc(it.sub || '')}${it.fecha ? ` · ${fmtDate(it.fecha)}` : ''}</span>${pendingBadge(it.clave)}</span>
       <span class="row-actions">
         <a class="btn btn-sm btn-ghost" href="${it.ver}">Ver</a>
-        <a class="btn btn-sm" href="${it.editar}">Editar</a>
-        <button type="button" class="btn btn-sm btn-danger" data-delete="${esc(it.clave)}" data-title="${esc(it.titulo)}">Eliminar</button>
+        <a class="btn btn-sm" href="${it.editar}">${it.editLabel || 'Editar'}</a>
+        ${it.noDelete ? '' : `<button type="button" class="btn btn-sm btn-danger" data-delete="${esc(it.clave)}" data-title="${esc(it.titulo)}">Eliminar</button>`}
       </span>
     </li>`).join('')}</ul>`;
 }
@@ -1512,6 +1625,7 @@ function renderPanel() {
           <div class="pills" role="tablist">
             <button type="button" class="pill${panelTab === 'resenas' ? ' is-active' : ''}" data-tab="resenas">Reseñas (${reviews.length})</button>
             <button type="button" class="pill${panelTab === 'encuentros' ? ' is-active' : ''}" data-tab="encuentros">Encuentros (${encounters.length})</button>
+            <button type="button" class="pill${panelTab === 'autores' ? ' is-active' : ''}" data-tab="autores">Autores (${authors.length} de ${reviewedAuthors().length} con semblanza)</button>
           </div>
           <input type="search" class="panel-search" placeholder="Buscar por título, autor o lugar…" value="${esc(panelQuery)}" aria-label="Buscar en el contenido">
         </div>
@@ -1542,7 +1656,7 @@ function renderPanel() {
 
 async function refreshPanel() {
   const y = window.scrollY;
-  await Promise.all([loadReviews(), loadEncounters(), localMode ? loadPending() : null]);
+  await Promise.all([loadReviews(), loadEncounters(), loadAuthors(), localMode ? loadPending() : null]);
   if (parseHash().parts[0] !== 'admin') return;
   renderPanel();
   window.scrollTo(0, y);
@@ -1550,13 +1664,14 @@ async function refreshPanel() {
 
 async function deleteEntry(clave, titulo) {
   const [tipo, id] = [clave.slice(0, clave.indexOf(':')), clave.slice(clave.indexOf(':') + 1)];
-  const what = tipo === 'resena' ? 'la reseña' : 'el encuentro';
+  const what = { resena: 'la reseña', encuentro: 'el encuentro', autor: 'la semblanza de' }[tipo];
+  const endpoint = { resena: 'resenas', encuentro: 'encuentros', autor: 'autores' }[tipo];
   const note = localMode
     ? '\n\nDesaparecerá de este panel ahora y de la web al pulsar «Subir cambios». Hasta entonces se puede recuperar desde «Cambios sin subir».'
     : '\n\nNo se puede deshacer.';
-  if (!confirm(`¿Eliminar ${what} «${titulo}» con sus fotos?${note}`)) return false;
-  await api('DELETE', `/api/${tipo === 'resena' ? 'resenas' : 'encuentros'}/${encodeURIComponent(id)}`);
-  toast(tipo === 'resena' ? 'Reseña eliminada' : 'Encuentro eliminado');
+  if (!confirm(`¿Eliminar ${what} «${titulo}»${tipo === 'autor' ? '' : ' con sus fotos'}?${note}`)) return false;
+  await api('DELETE', `/api/${endpoint}/${encodeURIComponent(id)}`);
+  toast({ resena: 'Reseña eliminada', encuentro: 'Encuentro eliminado', autor: 'Semblanza eliminada' }[tipo]);
   return true;
 }
 
@@ -1653,7 +1768,7 @@ function renderLogin(volver) {
 if (STATIC) document.querySelector('.admin-link')?.remove();
 
 function start() {
-  Promise.all([loadReviews(), loadEncounters(), loadAdmin()])
+  Promise.all([loadReviews(), loadEncounters(), loadAuthors(), loadAdmin()])
     .then(route)
     .catch(() => {
       app.innerHTML = `<div class="empty"><h2>No se pudo conectar con el servidor</h2><p>Vuelve a intentarlo dentro de un momento.</p></div>`;

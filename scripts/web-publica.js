@@ -27,6 +27,8 @@ const encounters = readJson('encuentros.json').map((e) => ({
 }));
 writeJson('resenas.json', reviews);
 writeJson('encuentros.json', encounters);
+const authorsFile = path.join(DATA, 'autores.json');
+writeJson('autores.json', fs.existsSync(authorsFile) ? readJson('autores.json') : []);
 
 // La marca data-static hace que la web lea estos archivos en lugar de pedir los datos al servidor.
 const index = path.join(OUT, 'index.html');

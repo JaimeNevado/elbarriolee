@@ -28,6 +28,8 @@ const IMAGES_DIR = path.join(DATA_DIR, 'imagenes');
 const DB_FILE = path.join(DATA_DIR, 'resenas.json');
 const ENCOUNTERS_DIR = path.join(DATA_DIR, 'encuentros');
 const ENCOUNTERS_FILE = path.join(DATA_DIR, 'encuentros.json');
+// Semblanza de cada autor reseñado (la que publica su editorial), para encabezar su página.
+const AUTHORS_FILE = path.join(DATA_DIR, 'autores.json');
 const ADMIN_FILE = path.join(DATA_DIR, 'admin.json');
 // Una reseña con su portada y su galería viaja en una sola petición (las fotos ya llegan reducidas).
 const MAX_BODY = 80 * 1024 * 1024;
@@ -311,6 +313,42 @@ async function handleEncounters(req, res, id, sub) {
   throw httpError(405, 'Método no permitido.');
 }
 
+// Semblanzas: una por autor, con su procedencia (editorial y enlace a la página de donde se tomó).
+async function handleAuthors(req, res, id) {
+  if (!id && req.method === 'GET') return send(res, 200, await loadList(AUTHORS_FILE));
+  if (id && req.method === 'PUT') {
+    const body = await readJson(req, MAX_PUBLIC_BODY);
+    const entry = {
+      id,
+      autor: str(body.autor, 200),
+      semblanza: str(body.semblanza, 8000),
+      editorial: str(body.editorial, 120),
+      url: /^https?:\/\/\S+$/.test(str(body.url, 500)) ? str(body.url, 500) : '',
+    };
+    if (!entry.autor) throw httpError(400, 'Falta el nombre del autor.');
+    if (!entry.semblanza) throw httpError(400, 'Escribe la semblanza o elimínala.');
+    if (slugify(entry.autor) !== id) throw httpError(400, 'El autor no coincide con la dirección.');
+    const saved = await mutate((list) => {
+      const index = list.findIndex((a) => a.id === id);
+      const item = { ...entry, actualizado: new Date().toISOString() };
+      if (index === -1) list.push(item);
+      else list[index] = item;
+      list.sort((a, b) => a.autor.localeCompare(b.autor, 'es'));
+      return item;
+    }, AUTHORS_FILE);
+    return send(res, 200, saved);
+  }
+  if (id && req.method === 'DELETE') {
+    await mutate((list) => {
+      const index = list.findIndex((a) => a.id === id);
+      if (index === -1) throw httpError(404, 'Ese autor no tiene semblanza.');
+      list.splice(index, 1);
+    }, AUTHORS_FILE);
+    return send(res, 200, { ok: true });
+  }
+  throw httpError(405, 'Método no permitido.');
+}
+
 // ---------- Validación ----------
 
 function httpError(status, message) {
@@ -517,6 +555,15 @@ const CONTENT = {
     folder: (id) => path.join(IMAGES_DIR, id),
     sort: () => {},
   },
+  autor: {
+    file: 'autores.json',
+    load: () => loadList(AUTHORS_FILE),
+    path: () => AUTHORS_FILE,
+    labels: { nuevo: 'Semblanza nueva', editado: 'Semblanza editada', eliminado: 'Semblanza eliminada' },
+    media: () => [],
+    folder: null,
+    sort: (list) => list.sort((a, b) => a.autor.localeCompare(b.autor, 'es')),
+  },
   encuentro: {
     file: 'encuentros.json',
     load: () => loadList(ENCOUNTERS_FILE),
@@ -547,7 +594,7 @@ async function pendingChanges() {
     const before = new Map((await committedList(kind.file)).map((x) => [x.id, x]));
     const after = new Map(current.map((x) => [x.id, x]));
     const add = (accion, item) => changes.push({
-      clave: `${tipo}:${item.id}`, tipo, accion, id: item.id, titulo: item.titulo, texto: `${kind.labels[accion]}: ${item.titulo}`,
+      clave: `${tipo}:${item.id}`, tipo, accion, id: item.id, titulo: item.titulo || item.autor, texto: `${kind.labels[accion]}: ${item.titulo || item.autor}`,
     });
     for (const [id, item] of after) {
       if (!before.has(id)) add('nuevo', item);
@@ -617,12 +664,13 @@ async function undoChange(tipo, id) {
     else await fsp.unlink(file).catch(() => {});
   }
   // Carpeta de fotos de una entrada nueva: se quita entera (solo lo que no está ya en la web).
-  if (!before) {
+  if (!before && kind.folder) {
     const folder = kind.folder(id);
     if (fs.existsSync(folder)) await git(['clean', '-fdq', '--', path.relative(__dirname, folder)]);
     await fsp.rmdir(folder).catch(() => {});
   }
-  return before ? `Vuelve a estar como en la web: ${before.titulo}` : `Borrado del todo (no estaba en la web): ${current.titulo}`;
+  const name = (x) => x.titulo || x.autor;
+  return before ? `Vuelve a estar como en la web: ${name(before)}` : `Borrado del todo (no estaba en la web): ${name(current)}`;
 }
 
 // Deja reseñas, encuentros y fotos exactamente como están en la web. No toca el programa.
@@ -767,6 +815,7 @@ async function handleApi(req, res, parts) {
   const publicWrite = req.method === 'POST' && resource === 'resenas' && sub === 'opiniones' && !subId;
   if (req.method !== 'GET' && !publicWrite) requireAdmin(req);
   if (resource === 'encuentros') return handleEncounters(req, res, id, sub);
+  if (resource === 'autores') return handleAuthors(req, res, id);
   if (resource !== 'resenas') throw httpError(404, 'Ruta no encontrada.');
 
   if (!id) {
