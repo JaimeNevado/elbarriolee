@@ -254,6 +254,7 @@ function route() {
   else if (isAdminRoute(parts) && !admin) renderLogin(location.hash);
   else if (parts[0] === 'resena' && parts[1]) renderDetail(parts[1]);
   else if (parts[0] === 'autor' && parts[1]) renderAuthorForm(parts[1]);
+  else if (parts[0] === 'aviso-legal') renderLegal();
   else if (parts[0] === 'grial') renderGrail();
   else if (parts[0] === 'literatura-3d' && parts[1] === 'nuevo') renderEncounterForm(null);
   else if (parts[0] === 'literatura-3d' && parts[1] && parts[2] === 'editar') renderEncounterForm(parts[1]);
@@ -1441,6 +1442,55 @@ async function scaledCanvas(file, max) {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+// ---------- Aviso legal y privacidad ----------
+
+const CONTACT_EMAIL = 'elbarriolee@gmail.com';
+
+function renderLegal() {
+  setActiveNav('');
+  document.title = 'Aviso legal y privacidad · El Barrio';
+  const mail = `<a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>`;
+  app.innerHTML = `
+    <article class="legal-page fade-in">
+      <a class="back" href="#/">← Inicio</a>
+      <h1>Aviso legal y privacidad</h1>
+      <p class="hint">Última actualización: 28 de noviembre de 2026</p>
+      <div class="prose">
+        <h2>Quién está detrás de esta web</h2>
+        <ul>
+          <li><strong>Titular:</strong> Tomás Nevado</li>
+          <li><strong>Contacto:</strong> ${mail}</li>
+          <li><strong>Web:</strong> elbarriolee.club</li>
+        </ul>
+        <p>El Barrio es un club de lectura de Ronda. Esta web es un proyecto cultural sin ánimo de lucro: reúne las reseñas de los libros que leemos y la crónica de nuestros encuentros. No vende productos ni servicios y no contiene publicidad.</p>
+
+        <h2>Tus datos personales</h2>
+        <ul>
+          <li><strong>No recogemos datos.</strong> La web no tiene formularios, registro de usuarios ni comentarios.</li>
+          <li><strong>No usamos cookies</strong> ni herramientas de estadísticas o seguimiento, y la web no guarda nada en tu navegador.</li>
+          <li><strong>Alojamiento.</strong> La web está alojada en GitHub Pages, un servicio de GitHub, Inc. Como cualquier servidor, GitHub registra la dirección IP de quien la visita por motivos técnicos y de seguridad. Ese registro lo hace GitHub según su <a href="https://docs.github.com/es/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">declaración de privacidad</a>.</li>
+          <li><strong>Enlaces a Instagram.</strong> El botón «Comentar en Instagram» y otros enlaces llevan a Instagram o a otras webs, que aplican sus propias políticas de privacidad y de cookies. Lo que publiques allí queda sujeto a sus condiciones.</li>
+          <li><strong>Si nos escribes,</strong> usaremos tu dirección y lo que nos cuentes solo para responderte, y no lo cederemos a nadie.</li>
+        </ul>
+
+        <h2>Fotos y personas que aparecen en la web</h2>
+        <p>En «Literatura en 3D» publicamos fotos y vídeos de nuestros encuentros, en los que pueden aparecer asistentes. Si sales en alguna y prefieres que la retiremos, o quieres que corrijamos o eliminemos cualquier dato tuyo, escríbenos a ${mail} indicando cuál y la quitaremos lo antes posible.</p>
+        <p>En esa misma dirección puedes ejercer los derechos que te reconoce el Reglamento General de Protección de Datos (acceso, rectificación, supresión y oposición, entre otros). Si consideras que no los hemos atendido, puedes reclamar ante la <a href="https://www.aepd.es" target="_blank" rel="noopener">Agencia Española de Protección de Datos</a>.</p>
+
+        <h2>Propiedad intelectual</h2>
+        <ul>
+          <li>Las reseñas, las crónicas y las fotos propias son de El Barrio, © Tomás Nevado 2026. Puedes citarlas indicando su procedencia y enlazando a esta web; para cualquier otro uso, escríbenos.</li>
+          <li>Las semblanzas que encabezan la página de cada autor son las que publican sus editoriales. Se reproducen con fines informativos, indicando siempre la editorial y enlazando a su página.</li>
+          <li>Las portadas de los libros pertenecen a sus editoriales y demás titulares, y se muestran solo para ilustrar la reseña de cada obra.</li>
+          <li>Si eres titular de algún contenido de esta web y prefieres que lo retiremos, escríbenos y lo haremos.</li>
+        </ul>
+
+        <h2>Enlaces a otras webs</h2>
+        <p>Esta web enlaza a editoriales, a Instagram y a otras páginas. No controlamos su contenido ni respondemos de él.</p>
+      </div>
+    </article>`;
 }
 
 // ---------- Semblanzas de autores ----------
